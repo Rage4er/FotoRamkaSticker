@@ -1,73 +1,32 @@
+"""
+Главный файл приложения - генератор фоторамок из стикеров
+"""
+
 import os
 import sys
 import random
 import math
 import json
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Set
-from dataclasses import dataclass, asdict
-from PIL import Image, ImageDraw, ImageEnhance
 import io
-from enum import Enum
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+from PIL import Image, ImageDraw
 
 # PyQt6 импорты
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSlider, QSpinBox, QDoubleSpinBox,
     QGroupBox, QFormLayout, QFileDialog, QMessageBox,
-    QComboBox, QCheckBox, QSplitter, QProgressBar,
-    QScrollArea, QFrame, QSizePolicy, QButtonGroup, QRadioButton,
-    QGridLayout, QLayout, QSizePolicy
+    QComboBox, QCheckBox, QScrollArea, QFrame,
+    QSizePolicy, QButtonGroup, QRadioButton, QGridLayout
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QPropertyAnimation, QEasingCurve
-from PyQt6.QtGui import QPixmap, QImage, QIcon, QFont, QPalette, QColor, QPainter
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt6.QtGui import QPixmap, QFont, QPalette, QColor
 
-
-class BorderSide(Enum):
-    """Стороны для размещения стикеров"""
-    ALL = "Все стороны"
-    TOP = "Только верх"
-    BOTTOM = "Только низ"
-    LEFT = "Только лево"
-    RIGHT = "Только право"
-    TOP_BOTTOM = "Верх и низ"
-    LEFT_RIGHT = "Лево и право"
-    CORNERS = "Только углы"
-
-
-@dataclass
-class StickerConfig:
-    """Конфигурация для стикера"""
-    path: str
-    size: Tuple[int, int]
-    position: Tuple[int, int]
-    rotation: float
-    opacity: float = 1.0
-
-
-@dataclass
-class FrameConfig:
-    """Конфигурация для фоторамки"""
-    template_size: Tuple[int, int] = (1200, 800)
-    output_size: Tuple[int, int] = (1920, 1080)
-    sticker_dir: str = ""
-    sticker_density: float = 0.6
-    min_sticker_size: int = 40
-    max_sticker_size: int = 150
-    border_width: int = 100
-    border_overlap: int = 20  # Заход за границу шаблона
-    overlap_allowed: bool = True
-    random_rotation: bool = True
-    random_opacity: bool = False
-    min_opacity: float = 0.7
-    max_opacity: float = 1.0
-    background_color: Tuple[int, int, int, int] = (0, 0, 0, 0)
-    output_format: str = "PNG"
-    border_sides: BorderSide = BorderSide.ALL
-    gradient_density: bool = False  # Градиентная плотность
-    gradient_type: str = "linear"  # linear или radial
-    preview_auto: bool = True  # Автогенерация предпросмотра
-    preview_aspect: bool = True  # Сохранять соотношение сторон в предпросмотре
+# Импорты из наших модулей
+from frame_config import FrameConfig, BorderSide, AlgorithmType
+import algorithms
 
 
 def pil_to_pixmap(pil_image: Image.Image) -> QPixmap:
@@ -84,14 +43,11 @@ class StickerFrameGenerator:
     
     def __init__(self, config: FrameConfig):
         self.config = config
-        self.stickers: List[StickerConfig] = []
+        self.stickers: List = []
         self.loaded_stickers: List[Image.Image] = []
-        self.inner_rect: Optional[Tuple[int, int, int, int]] = None
-        self.perimeter_positions: List[Tuple[int, int]] = []
         
         if config.sticker_dir:
             self._load_stickers()
-            self._calculate_sticker_zone()
     
     def _load_stickers(self):
         """Загружает все PNG файлы из указанной директории."""
@@ -107,151 +63,6 @@ class StickerFrameGenerator:
                     self.loaded_stickers.append(img)
                 except Exception as e:
                     print(f"Ошибка загрузки {img_file}: {e}")
-    
-    def _calculate_sticker_zone(self):
-        """Рассчитывает зону для размещения стикеров по периметру."""
-        if not self.config.template_size:
-            return
-            
-        template_w, template_h = self.config.template_size
-        border = self.config.border_width
-        overlap = self.config.border_overlap
-        
-        # Внутренняя зона
-        inner_w = template_w - 2 * border
-        inner_h = template_h - 2 * border
-        
-        if inner_w <= 0 or inner_h <= 0:
-            inner_w = max(10, template_w - 20)
-            inner_h = max(10, template_h - 20)
-            border = min(template_w - inner_w, template_h - inner_h) // 2
-        
-        self.inner_rect = (border, border, border + inner_w, border + inner_h)
-        self._generate_perimeter_positions()
-    
-    def _generate_perimeter_positions(self):
-        """Генерирует возможные позиции для стикеров по периметру."""
-        if not self.config.template_size:
-            return
-            
-        template_w, template_h = self.config.template_size
-        border = self.config.border_width
-        overlap = self.config.border_overlap
-        
-        positions = []
-        step = max(5, border // 10)
-        
-        # Определяем, какие стороны активны
-        sides = self._get_active_sides()
-        
-        if 'top' in sides:
-            for x in range(-overlap, template_w + overlap, step):
-                positions.append((x, random.randint(-overlap, border // 2)))
-        
-        if 'bottom' in sides:
-            for x in range(-overlap, template_w + overlap, step):
-                positions.append((x, template_h - random.randint(1, border // 2 + overlap)))
-        
-        if 'left' in sides:
-            for y in range(border, template_h - border, step):
-                positions.append((random.randint(-overlap, border // 2), y))
-        
-        if 'right' in sides:
-            for y in range(border, template_h - border, step):
-                positions.append((template_w - random.randint(1, border // 2 + overlap), y))
-        
-        if 'corners' in sides:
-            # Угловые позиции
-            corner_size = border + overlap
-            for x in range(-overlap, corner_size, step):
-                for y in range(-overlap, corner_size, step):
-                    positions.append((x, y))  # Левый верхний угол
-                    positions.append((template_w - x - 1, y))  # Правый верхний
-                    positions.append((x, template_h - y - 1))  # Левый нижний
-                    positions.append((template_w - x - 1, template_h - y - 1))  # Правый нижний
-        
-        self.perimeter_positions = positions
-    
-    def _get_active_sides(self) -> Set[str]:
-        """Возвращает набор активных сторон для размещения стикеров."""
-        sides = set()
-        
-        if self.config.border_sides == BorderSide.ALL:
-            sides.update(['top', 'bottom', 'left', 'right'])
-        elif self.config.border_sides == BorderSide.TOP:
-            sides.add('top')
-        elif self.config.border_sides == BorderSide.BOTTOM:
-            sides.add('bottom')
-        elif self.config.border_sides == BorderSide.LEFT:
-            sides.add('left')
-        elif self.config.border_sides == BorderSide.RIGHT:
-            sides.add('right')
-        elif self.config.border_sides == BorderSide.TOP_BOTTOM:
-            sides.update(['top', 'bottom'])
-        elif self.config.border_sides == BorderSide.LEFT_RIGHT:
-            sides.update(['left', 'right'])
-        elif self.config.border_sides == BorderSide.CORNERS:
-            sides.add('corners')
-        
-        return sides
-    
-    def _get_gradient_density(self, position: Tuple[int, int]) -> float:
-        """Рассчитывает коэффициент плотности для градиентного заполнения."""
-        if not self.config.gradient_density:
-            return 1.0
-        
-        x, y = position
-        template_w, template_h = self.config.template_size
-        
-        if self.config.gradient_type == "linear":
-            # Линейный градиент от центра к краям
-            center_x, center_y = template_w // 2, template_h // 2
-            distance = math.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
-            max_distance = math.sqrt(center_x ** 2 + center_y ** 2)
-            return max(0.3, min(1.0, distance / max_distance))
-        else:
-            # Радиальный градиент
-            return random.uniform(0.3, 1.0)
-    
-    def _is_position_valid(self, sticker: StickerConfig, placed_stickers: List[StickerConfig]) -> bool:
-        """Проверяет валидность позиции стикера."""
-        if not self.inner_rect:
-            return True
-            
-        x, y = sticker.position
-        w, h = sticker.size
-        
-        # Разрешаем выход за границы с учетом overlap
-        overlap = self.config.border_overlap
-        if x + w < -overlap or x > self.config.template_size[0] + overlap:
-            return False
-        if y + h < -overlap or y > self.config.template_size[1] + overlap:
-            return False
-        
-        # Проверка внутренней зоны (только если стикер полностью внутри)
-        sticker_rect = (x, y, x + w, y + h)
-        if self._rectangles_overlap(sticker_rect, self.inner_rect):
-            # Проверяем, не находится ли стикер полностью внутри
-            if (x >= self.inner_rect[0] and x + w <= self.inner_rect[2] and
-                y >= self.inner_rect[1] and y + h <= self.inner_rect[3]):
-                return False
-        
-        # Проверка перекрытия
-        if not self.config.overlap_allowed:
-            for placed in placed_stickers:
-                placed_rect = (placed.position[0], placed.position[1],
-                              placed.position[0] + placed.size[0],
-                              placed.position[1] + placed.size[1])
-                if self._rectangles_overlap(sticker_rect, placed_rect):
-                    return False
-        
-        return True
-    
-    @staticmethod
-    def _rectangles_overlap(rect1: Tuple[int, int, int, int], rect2: Tuple[int, int, int, int]) -> bool:
-        """Проверяет пересечение двух прямоугольников."""
-        return not (rect1[2] <= rect2[0] or rect1[0] >= rect2[2] or
-                   rect1[3] <= rect2[1] or rect1[1] >= rect2[3])
     
     def _rotate_sticker(self, sticker_img: Image.Image, angle: float) -> Image.Image:
         """Поворачивает изображение стикера."""
@@ -282,19 +93,30 @@ class StickerFrameGenerator:
         if not self.loaded_stickers or not self.config.template_size:
             return None
         
+        # Выбираем алгоритм в зависимости от настроек
+        if self.config.algorithm == AlgorithmType.BASE:
+            algorithm = algorithms.BaseAlgorithm(self.config)
+        elif self.config.algorithm == AlgorithmType.UNIFORM:
+            algorithm = algorithms.UniformAlgorithm(self.config)
+        elif self.config.algorithm == AlgorithmType.GRADIENT:
+            algorithm = algorithms.GradientAlgorithm(self.config)
+        elif self.config.algorithm == AlgorithmType.CORNER:
+            algorithm = algorithms.CornerAlgorithm(self.config)
+        else:
+            algorithm = algorithms.BaseAlgorithm(self.config)
+        
+        algorithm.calculate_sticker_zone()
+        
         # Создаем изображение с фоном
         template_w, template_h = self.config.template_size
         result = Image.new("RGBA", (template_w, template_h), self.config.background_color)
         
-        # Количество стикеров
-        if not self.perimeter_positions:
-            self._generate_perimeter_positions()
-            
-        total_positions = len(self.perimeter_positions)
-        base_density = self.config.sticker_density
         placed_stickers = []
+        attempts = 0
         
-        for attempt in range(max_attempts):
+        while attempts < max_attempts and len(placed_stickers) < len(algorithm.perimeter_positions) // 2:
+            attempts += 1
+            
             # Выбираем случайный стикер
             sticker_img = random.choice(self.loaded_stickers)
             
@@ -326,27 +148,21 @@ class StickerFrameGenerator:
             
             # Пытаемся найти позицию
             found = False
-            for _ in range(10):  # 10 попыток для каждой позиции
-                if not self.perimeter_positions:
-                    break
-                    
-                pos = random.choice(self.perimeter_positions)
+            for pos in random.sample(algorithm.perimeter_positions, min(20, len(algorithm.perimeter_positions))):
+                # Для градиентных алгоритмов учитываем плотность
+                if hasattr(algorithm, 'get_gradient_density'):
+                    gradient_factor = algorithm.get_gradient_density(pos)
+                    effective_density = self.config.sticker_density * gradient_factor
+                    if random.random() > effective_density:
+                        continue
                 
-                # Применяем градиентную плотность
-                gradient_factor = self._get_gradient_density(pos)
-                effective_density = base_density * gradient_factor
+                sticker_config = type('StickerConfig', (), {
+                    'path': "", 'size': (width, height),
+                    'position': pos, 'rotation': rotation,
+                    'opacity': opacity
+                })()
                 
-                # Случайно решаем, размещать ли стикер с учетом плотности
-                if random.random() > effective_density:
-                    continue
-                
-                sticker_config = StickerConfig(
-                    path="", size=(width, height),
-                    position=pos, rotation=rotation,
-                    opacity=opacity
-                )
-                
-                if self._is_position_valid(sticker_config, placed_stickers):
+                if algorithm.is_position_valid(sticker_config, placed_stickers):
                     # Применяем трансформации
                     if rotation != 0:
                         transformed = self._rotate_sticker(scaled, rotation)
@@ -362,8 +178,7 @@ class StickerFrameGenerator:
                     found = True
                     break
             
-            if not found and len(placed_stickers) > 0:
-                # Если не нашли позицию и уже есть стикеры, выходим
+            if not found:
                 break
         
         # Масштабируем до выходного размера
@@ -411,7 +226,7 @@ class PreviewWidget(QLabel):
         """)
         self.setText("Предпросмотр появится здесь")
         self.setFont(QFont("Arial", 12))
-        self._aspect_ratio = 16/9  # Соотношение сторон по умолчанию
+        self._aspect_ratio = 16/9
         self._current_pixmap = None
     
     def set_aspect_ratio(self, width: int, height: int):
@@ -422,38 +237,29 @@ class PreviewWidget(QLabel):
     def update_preview(self, image: Image.Image):
         """Обновляет предпросмотр с новым изображением"""
         if image:
-            # Сохраняем соотношение сторон из изображения
             self._aspect_ratio = image.width / image.height
-            
-            # Конвертируем PIL Image в QPixmap
             self._current_pixmap = pil_to_pixmap(image)
             self._update_display()
     
     def resizeEvent(self, event):
-        """Переопределяем событие изменения размера для сохранения пропорций"""
+        """Переопределяем событие изменения размера"""
         super().resizeEvent(event)
         self._update_display()
     
     def _update_display(self):
         """Обновляет отображение с сохранением соотношения сторон"""
         if self._current_pixmap:
-            # Рассчитываем размер с сохранением пропорций
             container_size = self.size()
             pixmap_size = self._current_pixmap.size()
-            
-            # Сохраняем пропорции исходного изображения
             pixmap_aspect = pixmap_size.width() / pixmap_size.height()
             
             if container_size.width() / container_size.height() > pixmap_aspect:
-                # Высота ограничивает
                 new_height = container_size.height()
                 new_width = int(new_height * pixmap_aspect)
             else:
-                # Ширина ограничивает
                 new_width = container_size.width()
                 new_height = int(new_width / pixmap_aspect)
             
-            # Масштабируем
             scaled_pixmap = self._current_pixmap.scaled(
                 new_width, new_height,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -467,29 +273,32 @@ class SettingsPanel(QWidget):
     
     settings_changed = pyqtSignal(FrameConfig)
     generate_requested = pyqtSignal()
+    save_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
         self.config = FrameConfig()
         self.init_ui()
-        self.setFixedWidth(350)  # Фиксированная ширина
-        
+        self.setFixedWidth(380)  # Чуть шире для нового выбора алгоритма
+    
     def init_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(5)
         
-        # Прокручиваемая область для настроек
+        # Прокручиваемая область
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         settings_content = QWidget()
         content_layout = QVBoxLayout()
-        content_layout.setSpacing(15)
+        content_layout.setSpacing(10)
         
         # === ГРУППА: Основные настройки ===
         basic_group = QGroupBox("Основные настройки")
         basic_layout = QFormLayout()
+        basic_layout.setSpacing(5)
         
         # Размер шаблона
         size_layout = QHBoxLayout()
@@ -527,6 +336,13 @@ class SettingsPanel(QWidget):
         output_layout.addStretch()
         basic_layout.addRow("Размер вывода:", output_layout)
         
+        # Алгоритм размещения
+        self.algorithm_combo = QComboBox()
+        for algo in AlgorithmType:
+            self.algorithm_combo.addItem(algo.value, algo)
+        self.algorithm_combo.currentIndexChanged.connect(self.on_settings_changed)
+        basic_layout.addRow("Алгоритм:", self.algorithm_combo)
+        
         # Соотношение сторон предпросмотра
         self.preview_aspect_check = QCheckBox("Сохранять соотношение сторон")
         self.preview_aspect_check.setChecked(True)
@@ -539,6 +355,7 @@ class SettingsPanel(QWidget):
         # === ГРУППА: Стикеры ===
         sticker_group = QGroupBox("Стикеры")
         sticker_layout = QFormLayout()
+        sticker_layout.setSpacing(5)
         
         # Директория со стикерами
         dir_layout = QHBoxLayout()
@@ -599,6 +416,7 @@ class SettingsPanel(QWidget):
         # === ГРУППА: Размещение ===
         placement_group = QGroupBox("Размещение стикеров")
         placement_layout = QVBoxLayout()
+        placement_layout.setSpacing(5)
         
         # Стороны для размещения
         sides_group = QButtonGroup(self)
@@ -658,6 +476,7 @@ class SettingsPanel(QWidget):
         # === ГРУППА: Эффекты ===
         effects_group = QGroupBox("Эффекты")
         effects_layout = QFormLayout()
+        effects_layout.setSpacing(5)
         
         # Поворот
         self.rotation_check = QCheckBox("Случайный поворот")
@@ -704,6 +523,7 @@ class SettingsPanel(QWidget):
         # === ГРУППА: Выходной файл ===
         output_group = QGroupBox("Выходной файл")
         output_layout = QFormLayout()
+        output_layout.setSpacing(5)
         
         # Формат вывода
         self.format_combo = QComboBox()
@@ -714,38 +534,81 @@ class SettingsPanel(QWidget):
         output_group.setLayout(output_layout)
         content_layout.addWidget(output_group)
         
-        # Добавляем растягивающийся элемент в конце
+        # Растягивающийся элемент
         content_layout.addStretch()
         
         settings_content.setLayout(content_layout)
         scroll_area.setWidget(settings_content)
         layout.addWidget(scroll_area)
         
-        # Кнопки внизу панели
-        button_layout = QHBoxLayout()
+        # === КНОПКИ ВНИЗУ ===
+        button_container = QWidget()
+        button_layout = QVBoxLayout()
+        button_layout.setSpacing(5)
         
-        self.generate_btn = QPushButton("Сгенерировать")
+        # Кнопка генерации
+        self.generate_btn = QPushButton("🎨 Сгенерировать фоторамку")
         self.generate_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+                padding: 12px;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+            }
+        """)
+        self.generate_btn.clicked.connect(self.generate_requested.emit)
+        
+        # Кнопка сохранения
+        self.save_btn = QPushButton("💾 Сохранить изображение")
+        self.save_btn.setEnabled(False)
+        self.save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+                padding: 12px;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+            }
+        """)
+        self.save_btn.clicked.connect(self.save_requested.emit)
+        
+        # Кнопка случайных настроек
+        self.random_btn = QPushButton("🎲 Случайные настройки")
+        self.random_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
                 color: white;
                 font-weight: bold;
                 padding: 10px;
                 border-radius: 5px;
             }
             QPushButton:hover {
-                background-color: #45a049;
+                background-color: #7B1FA2;
             }
         """)
-        self.generate_btn.clicked.connect(self.generate_requested.emit)
-        
-        self.random_btn = QPushButton("Случайные настройки")
         self.random_btn.clicked.connect(self.random_settings)
         
         button_layout.addWidget(self.generate_btn)
+        button_layout.addWidget(self.save_btn)
         button_layout.addWidget(self.random_btn)
         
-        layout.addLayout(button_layout)
+        button_container.setLayout(button_layout)
+        layout.addWidget(button_container)
         
         self.setLayout(layout)
     
@@ -782,6 +645,9 @@ class SettingsPanel(QWidget):
             self.output_height.value()
         )
         self.config.preview_aspect = self.preview_aspect_check.isChecked()
+        
+        # Выбор алгоритма
+        self.config.algorithm = self.algorithm_combo.currentData()
         
         # Стикеры
         self.config.min_sticker_size = self.min_size.value()
@@ -829,6 +695,9 @@ class SettingsPanel(QWidget):
         self.template_width.setValue(size[0])
         self.template_height.setValue(size[1])
         
+        # Случайный алгоритм
+        self.algorithm_combo.setCurrentIndex(random.randint(0, self.algorithm_combo.count()-1))
+        
         # Случайная плотность
         self.density_slider.setValue(random.randint(30, 90))
         
@@ -866,6 +735,10 @@ class SettingsPanel(QWidget):
     def get_config(self) -> FrameConfig:
         """Возвращает текущую конфигурацию"""
         return self.config
+    
+    def enable_save_button(self, enabled: bool):
+        """Включает или выключает кнопку сохранения"""
+        self.save_btn.setEnabled(enabled)
 
 
 class MainWindow(QMainWindow):
@@ -893,6 +766,7 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel()
         self.settings_panel.settings_changed.connect(self.on_settings_changed)
         self.settings_panel.generate_requested.connect(self.generate_frame)
+        self.settings_panel.save_requested.connect(self.save_image)
         
         # === ПРАВАЯ ПАНЕЛЬ: Только предпросмотр ===
         right_panel = QWidget()
@@ -908,6 +782,7 @@ class MainWindow(QMainWindow):
                 border-radius: 5px;
                 margin-top: 10px;
                 padding-top: 10px;
+                font-size: 14px;
             }
         """)
         
@@ -922,57 +797,33 @@ class MainWindow(QMainWindow):
         info_layout = QHBoxLayout()
         
         self.resolution_label = QLabel("Шаблон: 1200×800")
-        self.resolution_label.setStyleSheet("color: #888;")
+        self.resolution_label.setStyleSheet("color: #888; font-size: 11px;")
         
         self.stickers_label = QLabel("Стикеры: 0")
-        self.stickers_label.setStyleSheet("color: #888;")
+        self.stickers_label.setStyleSheet("color: #888; font-size: 11px;")
+        
+        self.algorithm_label = QLabel("Алгоритм: Базовый")
+        self.algorithm_label.setStyleSheet("color: #888; font-size: 11px;")
         
         self.status_label = QLabel("Готов")
-        self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
         
         info_layout.addWidget(self.resolution_label)
         info_layout.addWidget(self.stickers_label)
+        info_layout.addWidget(self.algorithm_label)
         info_layout.addStretch()
         info_layout.addWidget(self.status_label)
         
         preview_layout.addLayout(info_layout)
         preview_group.setLayout(preview_layout)
         
-        # Панель управления предпросмотром
-        control_group = QGroupBox("Управление")
-        control_layout = QHBoxLayout()
-        
-        self.save_btn = QPushButton("Сохранить изображение")
-        self.save_btn.clicked.connect(self.save_image)
-        self.save_btn.setEnabled(False)
-        self.save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-            QPushButton:disabled {
-                background-color: #555555;
-            }
-        """)
-        
-        control_layout.addWidget(self.save_btn)
-        control_layout.addStretch()
-        
-        control_group.setLayout(control_layout)
-        
-        right_layout.addWidget(preview_group, 4)
-        right_layout.addWidget(control_group, 1)
+        right_layout.addWidget(preview_group)
         
         right_panel.setLayout(right_layout)
         
         # Добавляем панели в основной макет
         main_layout.addWidget(self.settings_panel)
-        main_layout.addWidget(right_panel, 1)  # Правая панель растягивается
+        main_layout.addWidget(right_panel, 1)
         
         central_widget.setLayout(main_layout)
         
@@ -983,6 +834,7 @@ class MainWindow(QMainWindow):
         """Обработчик изменения настроек"""
         # Обновляем информацию
         self.resolution_label.setText(f"Шаблон: {config.template_size[0]}×{config.template_size[1]}")
+        self.algorithm_label.setText(f"Алгоритм: {config.algorithm.value}")
         
         # Обновляем количество стикеров
         if config.sticker_dir:
@@ -1010,11 +862,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", "Выберите директорию со стикерами")
             return
         
-        # Отключаем кнопку на время генерации
+        # Отключаем кнопки на время генерации
         self.settings_panel.generate_btn.setEnabled(False)
-        self.save_btn.setEnabled(False)
+        self.settings_panel.save_btn.setEnabled(False)
         self.status_label.setText("Генерация...")
-        self.status_label.setStyleSheet("color: #FF9800; font-weight: bold;")
+        self.status_label.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 11px;")
         
         # Запускаем в отдельном потоке
         self.generation_thread = GenerationThread(config)
@@ -1026,18 +878,19 @@ class MainWindow(QMainWindow):
         """Обработчик завершения генерации"""
         self.current_image = image
         self.preview_widget.update_preview(image)
-        self.save_btn.setEnabled(True)
+        self.settings_panel.enable_save_button(True)
         self.settings_panel.generate_btn.setEnabled(True)
         self.status_label.setText("Готово")
-        self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        self.status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
         self.statusBar().showMessage(f"Фоторамка сгенерирована. Размер: {image.size[0]}×{image.size[1]}")
     
     def on_generation_error(self, error_msg: str):
         """Обработчик ошибки генерации"""
         QMessageBox.critical(self, "Ошибка генерации", error_msg)
         self.settings_panel.generate_btn.setEnabled(True)
+        self.settings_panel.enable_save_button(False)
         self.status_label.setText("Ошибка")
-        self.status_label.setStyleSheet("color: #F44336; font-weight: bold;")
+        self.status_label.setStyleSheet("color: #F44336; font-weight: bold; font-size: 11px;")
         self.statusBar().showMessage(f"Ошибка: {error_msg}")
     
     def save_image(self):
@@ -1059,7 +912,7 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить фоторамку",
-            f"sticker_frame_{config.template_size[0]}x{config.template_size[1]}.{ext}",
+            f"sticker_frame_{config.template_size[0]}x{config.template_size[1]}_{config.algorithm.name.lower()}.{ext}",
             f"Изображения (*.{ext})"
         )
         

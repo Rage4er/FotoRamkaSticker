@@ -14,6 +14,8 @@ pyinstaller --onefile --windowed ^
   --hidden-import=PyQt6.QtGui ^
   --hidden-import=PyQt6.QtWidgets ^
   --add-data "test_stickers;test_stickers" ^
+  --add-data "algorithms;algorithms" ^
+  --add-data "frame_config.py;." ^
   sticker_frame_gui.py
 
 if exist "dist\StickerFrameGenerator.exe" (

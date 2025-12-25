@@ -15,3 +15,20 @@
 2. Настройте параметры во вкладках
 3. Нажмите "Сгенерировать" для предпросмотра
 4. Сохраните результат
+
+
+🎨 Sticker Frame Generator - Модульная версия с выбором алгоритмов
+📁 Структура проекта
+text
+FotoRamkaSticker/
+├── sticker_frame_gui.py          # Главный файл с интерфейсом
+├── frame_config.py              # Классы конфигурации
+├── algorithms/                  # Папка с алгоритмами
+│   ├── __init__.py
+│   ├── base_algorithm.py       # Базовый алгоритм
+│   ├── uniform_algorithm.py    # Равномерный алгоритм
+│   ├── gradient_algorithm.py   # Градиентный алгоритм
+│   └── corner_algorithm.py     # Угловой алгоритм
+├── test_stickers/              # Папка с тестовыми стикерами
+├── requirements.txt
+└── build_exe.bat
